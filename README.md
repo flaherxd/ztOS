@@ -8,7 +8,7 @@ updater and an SDK for apps in Python and Qt. The ztMETRO Shell and its componen
 
 **Supported & Ported Devices:**
 - **Samsung Galaxy S9** (`starlte`, Exynos 9810) — Reference device.
-- **OnePlus 6T** (`oneplus-fajita`, Qualcomm Snapdragon 845) — Mainline Linux port with Turnip Vulkan and UCM2 audio (see [ztconflo OnePlus 6T port](https://github.com/flaherxd/ztconflo/tree/port/oneplus-fajita)).
+- **OnePlus 6T** (`oneplus-fajita`, Qualcomm Snapdragon 845) — Mainline Linux port with Turnip Vulkan and UCM2 audio (safe/quiet volume cap) (see [ztconflo OnePlus 6T port](https://github.com/flaherxd/ztconflo/tree/port/oneplus-fajita)).
 
 > This ROM is in Beta, The installer is not tested on real hardware, open a issue in this github repo if you have any issues with it
 
