@@ -202,8 +202,40 @@ static int nav_h = NAV_BAR_H;
 #define FOV_DEG		34	/* vertical field of view of the one projection */
 /* the press, as everywhere (ZMC_TILT_* in core/zrnmetrocore.h) */
 #define TILT_DEG	14	/* how far a pressed tile leans toward the finger */
-#define TORCH_PATH	"/sys/class/leds/white:torch/brightness"	/* leds/zrn-flash.ko */
-#define TORCH_LEVEL	9	/* of 15: the top of Samsung's torch table */
+static const char *torch_find_path(void) {
+	static const char *paths[] = {
+		"/sys/class/leds/white:flash/brightness",
+		"/sys/class/leds/white:torch/brightness",
+		"/sys/class/leds/flashlight/brightness",
+		NULL
+	};
+	for (int i = 0; paths[i]; i++) {
+		if (access(paths[i], W_OK) == 0) return paths[i];
+	}
+	for (int i = 0; paths[i]; i++) {
+		if (access(paths[i], F_OK) == 0) return paths[i];
+	}
+	return NULL;
+}
+
+static void torch_set(bool on) {
+	const char *main_path = torch_find_path();
+	if (!main_path) return;
+	int level = on ? 80 : 0;
+	if (strstr(main_path, "white:torch")) level = on ? 9 : 0;
+	FILE *f = fopen(main_path, "w");
+	if (f) {
+		fprintf(f, "%d\n", level);
+		fclose(f);
+	}
+	if (access("/sys/class/leds/yellow:flash/brightness", W_OK) == 0) {
+		FILE *fy = fopen("/sys/class/leds/yellow:flash/brightness", "w");
+		if (fy) {
+			fprintf(fy, "%d\n", on ? 80 : 0);
+			fclose(fy);
+		}
+	}
+}
 #define TILT_IN_MS	70
 #define TILT_OUT_MS	200	/* back up on Log(10) (Windows Phone's TiltUp) */
 #define MAGNET_RANGE	188.0	/* points: WP's 250 px threshold on its 480-px-wide screen */
@@ -6076,9 +6108,10 @@ static void ui_sound(struct zt_server *server, enum ui_sound sound) {
 	if (!runtime) return;
 	struct sockaddr_un addr = { .sun_family = AF_UNIX };
 	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s/ztos-sounds.sock", runtime);
-	/* keyboard taps sit well under the ringer: at its level they were too loud */
+	/* keyboard taps sit well under the ringer */
 	int percent = server->ring_volume * 100 / VOLUME_MAX;
-	if (sound == UIS_KEY || sound == UIS_SPACE || sound == UIS_FUNCTION) percent = percent * 35 / 100;
+	if (sound == UIS_KEY || sound == UIS_SPACE || sound == UIS_FUNCTION) percent = percent * 80 / 100;
+	if (percent > 100) percent = 100;
 	unsigned char packet[2] = { (unsigned char)sound, (unsigned char)percent };
 	sendto(server->key_sound_fd, packet, sizeof(packet), MSG_DONTWAIT, (struct sockaddr *)&addr, sizeof(addr));
 }
@@ -6303,7 +6336,7 @@ static void shade_tile_draw(struct zt_server *server, cairo_t *cr, int i, double
 	 * phone yet (no driver, no service), nor the flashlight while
 	 * zrn-flash is not loaded: shown, faint, and not pretending to switch */
 	bool missing = q == Q_ROTATION || q == Q_LOCATION ||
-		(q == Q_FLASHLIGHT && access(TORCH_PATH, W_OK) != 0) ||
+		(q == Q_FLASHLIGHT && !torch_find_path()) ||
 		(q == Q_BLUETOOTH && access("/sys/class/bluetooth/hci0", F_OK) != 0);
 	bool on = q == Q_WIFI ? server->shade_wifi : q == Q_AIRPLANE ? server->shade_airplane :
 		q == Q_DATA ? server->cell_data_on : q == Q_VIBRATE ? server->haptics_enabled :
@@ -7955,15 +7988,12 @@ static void shade_activate(struct zt_server *server, int index) {
 		damage(server);
 		break;
 	case 100 + Q_FLASHLIGHT: {
-		/* the rear flash LED at a torch's current (leds/zrn-flash.ko) */
-		FILE *f = fopen(TORCH_PATH, "w");
-		if (!f) {
+		if (!torch_find_path()) {
 			break;	/* not loaded: the tile is drawn faint */
 		}
 		hap(server, HAP_TAP, HG_SYSTEM);
 		server->shade_torch = !server->shade_torch;
-		fprintf(f, "%d\n", server->shade_torch ? TORCH_LEVEL : 0);
-		fclose(f);
+		torch_set(server->shade_torch);
 		draw_shade(server);
 		damage(server);
 		break;
@@ -10297,11 +10327,10 @@ static void volume_step(struct zt_server *server, int by) {
     draw_volume(server);
     animate(server, &server->volume_y, 0.0f, 140, 0, false);
     wl_event_source_timer_update(server->volume_timer, server->media ? 4000 : 2000);
-    if (server->volume_is_media) {
-        char percent[16];
-        snprintf(percent, sizeof(percent), "%d%%", *level * 100 / VOLUME_MAX);
-        run_detached("wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", percent);
-    }
+    char percent[16];
+    int pct = *level * 100 / VOLUME_MAX;
+    snprintf(percent, sizeof(percent), "%d%%", pct);
+    run_detached("wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", percent);
     hap(server, !server->volume_is_media && previous > 0 && *level == 0 ? HAP_TAP : HAP_TICK, HG_SYSTEM);
     if (!server->volume_is_media && *level != previous) {
         /* the ringer at its new level, as Windows Phone does: one pip after

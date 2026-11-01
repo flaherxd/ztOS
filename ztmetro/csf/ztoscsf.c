@@ -410,7 +410,9 @@ static void battery_look(void)
 {
 	static bool warned;
 	int level = -1, online = 0, v;
-	FILE *f = fopen("/sys/class/power_supply/max170xx_battery/capacity", "r");
+	FILE *f = fopen("/sys/class/power_supply/bq27411-0/capacity", "r");
+	if (!f) f = fopen("/sys/class/power_supply/max170xx_battery/capacity", "r");
+	if (!f) f = fopen("/sys/class/power_supply/battery/capacity", "r");
 	if (f) {
 		if (fscanf(f, "%d", &level) != 1)
 			level = -1;
@@ -497,6 +499,9 @@ static void hub_release(void)
 static void sensorhub_look(void)
 {
 	static bool dialog_shown = false;
+	if (access("/sys/class/sec/sensorhub", F_OK) != 0) {
+		return;
+	}
 	if (access("/run/ztoscsf-sensorhub.stopped", F_OK) == 0 ||
 	    access("/run/sensorhub.stopped", F_OK) == 0) {
 		return;
