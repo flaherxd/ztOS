@@ -4,11 +4,13 @@ set -eu
 make camera/ztcamera
 check_dir=$(mktemp -d /tmp/ztcamera-check-build-XXXXXX)
 trap 'rm -rf "$check_dir"' EXIT HUP INT TERM
-app_pkgs='xkbcommon wayland-client wayland-egl egl glesv2 cairo pangocairo gdk-pixbuf-2.0'
-${CC:-cc} -O1 -g -std=c11 -Wall -Wextra -Wno-unused-parameter -Icore \
+app_pkgs='xkbcommon wayland-client wayland-egl egl glesv2 cairo pangocairo gdk-pixbuf-2.0 gstreamer-1.0 gstreamer-app-1.0'
+${CC:-cc} -O1 -g -std=c11 -Wall -Wextra -Wno-unused-parameter -Icore -DHAVE_GSTREAMER=1 \
     $(pkg-config --cflags $app_pkgs) -o "$check_dir/test-camera" \
     camera/test-camera.c core/zrnmetrocore.c core/zrnmetrogpu.c \
     core/xdg-shell-protocol.c core/viewporter-protocol.c \
+    retro/dotmatrix.c retro/dm-chrome.c retro/dm-wrap.c \
+    -Wl,--wrap=cairo_fill,--wrap=cairo_fill_preserve,--wrap=cairo_stroke,--wrap=cairo_stroke_preserve,--wrap=cairo_paint \
     $(pkg-config --libs $app_pkgs) -lm
 "$check_dir/test-camera"
 # Isolate render-mode camera-roll directories from the real user's captures.

@@ -45,7 +45,13 @@ int main(void) {
 			assert((row[x] & 0xffffff) == (y % 2 ? 0xfefefe : 0));
 		}
 	}
-	for (int i = 0; i < 4; i++) capture_photo();
+	for (int i = 0; i < 4; i++) {
+		capture_photo();
+		while (save.busy) {
+			save_finish();
+			usleep(1000);
+		}
+	}
 	roll_scan();
 	assert(roll_count == 4); /* repeated shots must never replace earlier ones */
 

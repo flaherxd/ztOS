@@ -41,6 +41,12 @@
 
 #include <linux/videodev2.h>
 
+#if HAVE_GSTREAMER
+#include <gst/gst.h>
+#include <gst/app/gstappsink.h>
+static void gst_cam_close(void);
+#endif
+
 #include "zrnmetrocore.h"
 #include "zrnmetrogpu.h"
 
@@ -56,7 +62,7 @@
 #define N_CONTROLS	5
 #define ROLL_DIR	"ztCamera"	/* ~/Pictures/ztCamera, where captures go */
 
-enum source_kind { SRC_SCENE, SRC_REPLAY, SRC_V4L2, SRC_RAW };
+enum source_kind { SRC_SCENE, SRC_REPLAY, SRC_V4L2, SRC_RAW, SRC_CAM };
 enum mode { MODE_PHOTO, MODE_VIDEO };
 enum hit { HIT_NONE, HIT_BACK, HIT_MORE, HIT_CONTROL, HIT_SHUTTER, HIT_VIDEO,
 	HIT_FACING, HIT_LENSES, HIT_THUMB, HIT_DIAL, HIT_MENU, HIT_VIEW };
@@ -254,6 +260,9 @@ static void frame_alloc(int w, int h) {
 }
 
 static void source_stop(void) {
+#if HAVE_GSTREAMER
+	gst_cam_close();
+#endif
 	raw_close();
 	if (src.fd >= 0) {
 		zmc_watch_fd(src.fd, NULL, NULL);
@@ -374,9 +383,88 @@ static bool replay_open(const char *path, int w, int h, double rate) {
 
 static void v4l2_ready(int fd, void *data);
 
+#if HAVE_GSTREAMER
+static GstElement *gst_pipeline;
+static GstElement *gst_sink;
+
+static void gst_cam_close(void) {
+	if (gst_pipeline) {
+		gst_element_set_state(gst_pipeline, GST_STATE_NULL);
+		if (gst_sink) {
+			gst_object_unref(gst_sink);
+			gst_sink = NULL;
+		}
+		gst_object_unref(gst_pipeline);
+		gst_pipeline = NULL;
+	}
+}
+
+static bool gst_cam_open(bool front) {
+	gst_cam_close();
+	static bool inited = false;
+	if (!inited) {
+		gst_init(NULL, NULL);
+		inited = true;
+	}
+	char pipe[512];
+	if (front) {
+		snprintf(pipe, sizeof(pipe),
+			"libcamerasrc camera-name=\"/base/soc@0/cci@ac4a000/i2c-bus@0/camera@10\" ! videoconvert ! "
+			"video/x-raw,format=BGRx,width=%d,height=%d ! "
+			"appsink name=sink emit-signals=false max-buffers=1 drop=true",
+			FRAME_W, FRAME_H);
+	} else {
+		snprintf(pipe, sizeof(pipe),
+			"libcamerasrc camera-name=\"/base/soc@0/cci@ac4a000/i2c-bus@0/camera@1a\" ! videoconvert ! "
+			"video/x-raw,format=BGRx,width=%d,height=%d ! "
+			"appsink name=sink emit-signals=false max-buffers=1 drop=true",
+			FRAME_W, FRAME_H);
+	}
+	GError *err = NULL;
+	gst_pipeline = gst_parse_launch(pipe, &err);
+	if (!gst_pipeline || err) {
+		if (err) {
+			g_error_free(err);
+			err = NULL;
+		}
+		gst_pipeline = gst_parse_launch(
+			"libcamerasrc ! videoconvert ! video/x-raw,format=BGRx,width=640,height=480 ! "
+			"appsink name=sink emit-signals=false max-buffers=1 drop=true",
+			&err);
+		if (!gst_pipeline || err) {
+			if (err) g_error_free(err);
+			return false;
+		}
+	}
+	gst_sink = gst_bin_get_by_name(GST_BIN(gst_pipeline), "sink");
+	if (!gst_sink) {
+		gst_cam_close();
+		return false;
+	}
+	if (gst_element_set_state(gst_pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+		gst_cam_close();
+		return false;
+	}
+	frame_alloc(FRAME_W, FRAME_H);
+	snprintf(src.name, sizeof(src.name), "%s camera (%s)",
+		front ? "front" : "rear",
+		front ? "IMX371" : "IMX519");
+	return true;
+}
+#endif
+
 static void source_start(enum source_kind want) {
 	source_stop();
 	switch (want) {
+#if HAVE_GSTREAMER
+	case SRC_CAM:
+		if (gst_cam_open(ui.front)) {
+			src.kind = SRC_CAM;
+			break;
+		}
+		note("camera failed to start");
+		/* fall through */
+#endif
 	case SRC_RAW:
 		if (raw_open(raw.cam)) {
 			src.kind = SRC_RAW;
@@ -395,6 +483,12 @@ static void source_start(enum source_kind want) {
 			break;
 		}
 		note("no camera device (%s)", device_path ? device_path : "none given");
+#if HAVE_GSTREAMER
+		if (gst_cam_open(ui.front)) {
+			src.kind = SRC_CAM;
+			break;
+		}
+#endif
 		/* fall through: a camera app without a picture is a dead end */
 	case SRC_SCENE:
 		src.kind = SRC_SCENE;
@@ -1500,6 +1594,12 @@ static void source_cycle(void) {
 	if (src.kind == SRC_SCENE && !replay_path && !device_path && access(RAW_DEV, F_OK) == 0) {
 		raw.cam = RAW_REAR;
 		source_start(SRC_RAW);
+#if HAVE_GSTREAMER
+	} else if (src.kind == SRC_SCENE && !replay_path && !device_path) {
+		source_start(SRC_CAM);
+	} else if (src.kind == SRC_CAM) {
+		source_start(SRC_SCENE);
+#endif
 	} else if (src.kind == SRC_SCENE) {
 		if (replay_path) {
 			source_start(SRC_REPLAY);
@@ -1545,6 +1645,13 @@ static void facing_toggle(void) {
 		source_start(SRC_RAW);
 		return;
 	}
+#if HAVE_GSTREAMER
+	if (src.kind == SRC_CAM) {
+		ui.front = !ui.front;
+		source_start(SRC_CAM);
+		return;
+	}
+#endif
 	if (src.kind != SRC_SCENE) {
 		note("front/rear selection is available in test scene only");
 		return;
@@ -1845,6 +1952,30 @@ static void tick(void) {
 		} else if (src.kind == SRC_SCENE) {
 			scene_frame(now / 1000.0);
 			frame_arrived();
+#if HAVE_GSTREAMER
+		} else if (src.kind == SRC_CAM && gst_sink) {
+			GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(gst_sink), 0);
+			if (sample) {
+				GstBuffer *buf = gst_sample_get_buffer(sample);
+				GstMapInfo map;
+				if (gst_buffer_map(buf, &map, GST_MAP_READ)) {
+					uint8_t *out = (uint8_t *)cairo_image_surface_get_data(src.frame);
+					int stride = cairo_image_surface_get_stride(src.frame);
+					if (stride == src.w * 4 && map.size >= (size_t)stride * src.h) {
+						memcpy(out, map.data, (size_t)stride * src.h);
+					} else {
+						for (int y = 0; y < src.h; y++) {
+							memcpy(out + (size_t)y * stride, map.data + (size_t)y * src.w * 4, src.w * 4);
+						}
+					}
+					cairo_surface_mark_dirty(src.frame);
+					src.rev++;
+					gst_buffer_unmap(buf, &map);
+					frame_arrived();
+				}
+				gst_sample_unref(sample);
+			}
+#endif
 		} else if (src.kind == SRC_REPLAY && src.map) {
 			size_t n = src.size / src.frame_bytes;
 			size_t i = (size_t)(now / 1000.0 * src.rate) % n;
@@ -1905,8 +2036,13 @@ static void arrived(int page) {
 	white_make();
 	roll_scan();
 	thumb_load();
+#if HAVE_GSTREAMER
+	source_start(device_path ? SRC_V4L2 : replay_path ? SRC_REPLAY :
+		access(RAW_DEV, F_OK) == 0 ? SRC_RAW : SRC_CAM);
+#else
 	source_start(device_path ? SRC_V4L2 : replay_path ? SRC_REPLAY :
 		access(RAW_DEV, F_OK) == 0 ? SRC_RAW : SRC_SCENE);
+#endif
 	if (src.kind == SRC_SCENE) {
 		snprintf(src.name, sizeof(src.name), "test scene 640x480");
 	}
@@ -2015,9 +2151,11 @@ int main(int argc, char **argv) {
 		if (dial_arg < -1 || dial_arg >= N_CONTROLS) return 2;
 		return render_png(out_png, dial_arg);
 	}
+#if !HAVE_GSTREAMER
 	if (!device_path && !replay_path && access("/dev/video0", R_OK | W_OK) == 0) {
 		device_path = "/dev/video0";
 	}
+#endif
 	int status = zmc_run(&camera, 0);
 	record_stop(NULL);
 	source_stop();

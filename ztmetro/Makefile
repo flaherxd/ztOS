@@ -62,10 +62,9 @@ CORE_DEPS = $(CORE) core/zrnboard.h retro/dotmatrix.h retro/dm-chrome.h retro/dm
 APP_BUILD = $(CC) $(CFLAGS) $(WARN) -Icore $(shell pkg-config --cflags $(APP_PKGS)) $(IAL_FLAGS)
 APP_LIBS = $(DM_WRAP_LDFLAGS) $(shell pkg-config --libs $(APP_PKGS)) $(IAL_LIBS) -lm
 
-# ztCamera: the camera, in the Lumia Camera look (see camera/CAMERA-DRIVERS.md
-# for why its viewfinder runs against a source that is not a sensor)
+# ztCamera: the camera, in the Lumia Camera look
 camera/ztcamera: camera/ztcamera.c $(CORE_DEPS)
-	$(APP_BUILD) -o $@ camera/ztcamera.c $(CORE) $(APP_LIBS)
+	$(APP_BUILD) $(shell pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 2>/dev/null) -DHAVE_GSTREAMER=1 -o $@ camera/ztcamera.c $(CORE) $(APP_LIBS) $(shell pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 2>/dev/null)
 
 settings/ztsettings: settings/ztsettings.c settings/boostpage.h $(CORE_DEPS)
 	$(APP_BUILD) -o $@ settings/ztsettings.c $(CORE) $(APP_LIBS)
