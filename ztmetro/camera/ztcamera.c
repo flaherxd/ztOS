@@ -409,14 +409,18 @@ static bool gst_cam_open(bool front) {
 	char pipe[512];
 	if (front) {
 		snprintf(pipe, sizeof(pipe),
-			"libcamerasrc camera-name=\"/base/soc@0/cci@ac4a000/i2c-bus@0/camera@10\" ! videoconvert ! "
-			"video/x-raw,format=BGRx,width=%d,height=%d ! "
+			"libcamerasrc camera-name=\"/base/soc@0/cci@ac4a000/i2c-bus@0/camera@10\" ! "
+			"video/x-raw,width=%d,height=%d ! "
+			"videoflip video-direction=ul-lr ! videoconvert ! "
+			"video/x-raw,format=BGRx ! "
 			"appsink name=sink emit-signals=false max-buffers=1 drop=true",
 			FRAME_W, FRAME_H);
 	} else {
 		snprintf(pipe, sizeof(pipe),
-			"libcamerasrc camera-name=\"/base/soc@0/cci@ac4a000/i2c-bus@0/camera@1a\" ! videoconvert ! "
-			"video/x-raw,format=BGRx,width=%d,height=%d ! "
+			"libcamerasrc camera-name=\"/base/soc@0/cci@ac4a000/i2c-bus@0/camera@1a\" ! "
+			"video/x-raw,width=%d,height=%d ! "
+			"videoflip video-direction=90r ! videoconvert ! "
+			"video/x-raw,format=BGRx ! "
 			"appsink name=sink emit-signals=false max-buffers=1 drop=true",
 			FRAME_W, FRAME_H);
 	}
@@ -428,7 +432,8 @@ static bool gst_cam_open(bool front) {
 			err = NULL;
 		}
 		gst_pipeline = gst_parse_launch(
-			"libcamerasrc ! videoconvert ! video/x-raw,format=BGRx,width=640,height=480 ! "
+			"libcamerasrc ! video/x-raw,width=640,height=480 ! "
+			"videoflip video-direction=90r ! videoconvert ! video/x-raw,format=BGRx ! "
 			"appsink name=sink emit-signals=false max-buffers=1 drop=true",
 			&err);
 		if (!gst_pipeline || err) {
@@ -445,7 +450,7 @@ static bool gst_cam_open(bool front) {
 		gst_cam_close();
 		return false;
 	}
-	frame_alloc(FRAME_W, FRAME_H);
+	frame_alloc(FRAME_H, FRAME_W);
 	snprintf(src.name, sizeof(src.name), "%s camera (%s)",
 		front ? "front" : "rear",
 		front ? "IMX371" : "IMX519");
@@ -2110,7 +2115,7 @@ static void usage(void) {
 	fprintf(stderr,
 		"ztcamera: the camera, in the Lumia Camera look\n"
 		"\n"
-		"  ztcamera [--device /dev/videoN] [--replay FILE [--size WxH] [--rate R]]\n"
+		"  ztcamera [--front] [--device /dev/videoN] [--replay FILE [--size WxH] [--rate R]]\n"
 		"  ztcamera --render OUT.png [dial 0-4]\n"
 		"\n"
 		"Without --device or --replay it draws its own test scene, which the\n"
@@ -2139,6 +2144,8 @@ int main(int argc, char **argv) {
 			out_png = argv[++i];
 		} else if (!strcmp(argv[i], "dial") && i + 1 < argc) {
 			dial_arg = atoi(argv[++i]);
+		} else if (!strcmp(argv[i], "--front")) {
+			ui.front = true;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
 			usage();
 			return 0;
